@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
+
 import 'dial_screen.dart';
 import 'call_service.dart';
 import 'call_history_screen.dart';
@@ -63,21 +65,62 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> topUpWallet() async {
+  Future<void> startStripeTopUp(double amount) async {
     try {
-      await CallService.topUpWallet(5.00);
-      await loadWallet();
+      final checkoutUrl = await CallService.createCheckoutSession(amount);
+      final uri = Uri.parse(checkoutUrl);
 
+      if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+        throw Exception('Could not open Stripe checkout');
+      }
+
+      Future.delayed(const Duration(seconds: 5), loadWallet);
+    } catch (e) {
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Wallet topped up by £5.00')),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Top-up failed: $e')),
+        SnackBar(content: Text('Payment failed: $e')),
       );
     }
+  }
+
+  void showTopUpOptions() {
+    showModalBottomSheet(
+      context: context,
+      builder: (_) {
+        return Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                'Top Up Wallet',
+                style: TextStyle(
+                  fontSize: 22,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 16),
+              topUpOption(5),
+              topUpOption(10),
+              topUpOption(20),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget topUpOption(double amount) {
+    return ListTile(
+      leading: const Icon(Icons.account_balance_wallet),
+      title: Text('Add £${amount.toStringAsFixed(0)}'),
+      trailing: const Icon(Icons.chevron_right),
+      onTap: () {
+        Navigator.pop(context);
+        startStripeTopUp(amount);
+      },
+    );
   }
 
   @override
@@ -110,7 +153,7 @@ class _HomeScreenState extends State<HomeScreen> {
       MaterialPageRoute(
         builder: (_) => const CallHistoryScreen(),
       ),
-    );
+    ).then((_) => loadWallet());
   }
 
   @override
@@ -202,7 +245,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 12),
 
             OutlinedButton.icon(
-              onPressed: topUpWallet,
+              onPressed: showTopUpOptions,
               icon: const Icon(Icons.account_balance_wallet),
               label: const Text('Top Up Wallet'),
               style: OutlinedButton.styleFrom(

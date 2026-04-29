@@ -46,23 +46,6 @@ class _DialScreenState extends State<DialScreen> {
     }
   }
 
-  Future<void> topUpWallet() async {
-    try {
-      await CallService.topUpWallet(5.00);
-      await loadWallet();
-
-      if (!mounted) return;
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Wallet topped up by £5.00')),
-      );
-    } catch (e) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Top-up failed: $e')),
-      );
-    }
-  }
-
   void addNumber(String val) {
     setState(() => number += val);
   }
@@ -188,13 +171,6 @@ class _DialScreenState extends State<DialScreen> {
                     ],
                   ),
           ),
-          TextButton(
-            onPressed: topUpWallet,
-            child: const Text(
-              'Top Up',
-              style: TextStyle(color: Colors.white),
-            ),
-          ),
         ],
       ),
     );
@@ -230,18 +206,13 @@ class _DialScreenState extends State<DialScreen> {
           child: Column(
             children: [
               const SizedBox(height: 16),
-
               walletCard(),
-
               const SizedBox(height: 16),
-
               Text(
                 'Caller: ${widget.callerNumber}',
                 style: const TextStyle(color: Color(0xFF607568)),
               ),
-
               const SizedBox(height: 8),
-
               Text(
                 formattedReceiverNumber,
                 textAlign: TextAlign.center,
@@ -251,9 +222,7 @@ class _DialScreenState extends State<DialScreen> {
                   color: Color(0xFF103D24),
                 ),
               ),
-
               const SizedBox(height: 20),
-
               Expanded(
                 child: GridView.count(
                   crossAxisCount: 3,
@@ -278,7 +247,6 @@ class _DialScreenState extends State<DialScreen> {
                   ],
                 ),
               ),
-
               Padding(
                 padding: const EdgeInsets.only(bottom: 24),
                 child: Row(

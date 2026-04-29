@@ -93,8 +93,8 @@ class CallService {
     return data;
   }
 
-  static Future<Map<String, dynamic>> topUpWallet(double amount) async {
-    final url = Uri.parse('$baseUrl/wallet/top-up');
+  static Future<String> createCheckoutSession(double amount) async {
+    final url = Uri.parse('$baseUrl/create-checkout-session');
 
     final response = await http.post(
       url,
@@ -105,7 +105,12 @@ class CallService {
     );
 
     final data = jsonDecode(response.body);
-    return data;
+
+    if (data['success'] == true && data['checkoutUrl'] != null) {
+      return data['checkoutUrl'];
+    }
+
+    throw Exception(data['error'] ?? 'Failed to create checkout session');
   }
 
   static Future<List<dynamic>> getCallHistory() async {
