@@ -3,16 +3,15 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const twilio = require('twilio');
+const Stripe = require('stripe');
 const fs = require('fs');
 const path = require('path');
 
 const app = express();
 
-console.log('BATCH 16 SERVER LOADED - JSON STORAGE ENABLED');
+console.log('PAYMENTS SERVER LOADED - STRIPE CHECKOUT ENABLED');
 
-app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
@@ -27,21 +26,81 @@ const defaultData = {
     currency: 'GBP',
   },
   callHistory: [],
+  topUpHistory: [],
+  processedPayments: [],
 };
 
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
-    return defaultData;
+    return { ...defaultData };
   }
 
   const raw = fs.readFileSync(DATA_FILE, 'utf8');
-  return JSON.parse(raw);
+  const parsed = JSON.parse(raw);
+
+  return {
+    wallet: parsed.wallet || defaultData.wallet,
+    callHistory: parsed.callHistory || [],
+    topUpHistory: parsed.topUpHistory || [],
+    processedPayments: parsed.processedPayments || [],
+  };
 }
 
 function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
+
+// Stripe webhook needs raw body before express.json()
+app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (req, res) => {
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  let event;
+
+  try {
+    if (webhookSecret) {
+      const signature = req.headers['stripe-signature'];
+      event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
+    } else {
+      event = JSON.parse(req.body.toString());
+    }
+  } catch (err) {
+    console.error('Stripe webhook error:', err.message);
+    return res.status(400).send(`Webhook Error: ${err.message}`);
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const paymentId = session.payment_intent || session.id;
+    const amount = Number(session.metadata?.amount || 0);
+
+    if (amount > 0) {
+      const data = loadData();
+
+      if (!data.processedPayments.includes(paymentId)) {
+        data.wallet.balance += amount;
+
+        data.topUpHistory.unshift({
+          paymentId,
+          amount: amount.toFixed(2),
+          currency: 'GBP',
+          status: 'completed',
+          createdAt: new Date().toISOString(),
+        });
+
+        data.processedPayments.push(paymentId);
+        saveData(data);
+
+        console.log(`Stripe top-up complete: £${amount.toFixed(2)}`);
+      }
+    }
+  }
+
+  res.sendStatus(200);
+});
+
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 const callStatuses = {};
 const RATE_PER_MINUTE = 0.10;
@@ -62,25 +121,68 @@ app.get('/wallet', (req, res) => {
   });
 });
 
-app.post('/wallet/top-up', (req, res) => {
-  const amount = Number(req.body.amount);
+app.post('/create-checkout-session', async (req, res) => {
+  try {
+    const amount = Number(req.body.amount);
+    const allowedAmounts = [5, 10, 20];
 
-  if (!amount || amount <= 0) {
-    return res.status(400).json({
+    if (!allowedAmounts.includes(amount)) {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid top-up amount',
+      });
+    }
+
+    const baseUrl = process.env.BASE_URL || 'https://callnaija-backend.onrender.com';
+
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      payment_method_types: ['card'],
+      success_url: `${baseUrl}/payment-success`,
+      cancel_url: `${baseUrl}/payment-cancelled`,
+      line_items: [
+        {
+          price_data: {
+            currency: 'gbp',
+            product_data: {
+              name: `CallNaija Wallet Top Up £${amount}`,
+            },
+            unit_amount: amount * 100,
+          },
+          quantity: 1,
+        },
+      ],
+      metadata: {
+        amount: amount.toString(),
+      },
+    });
+
+    res.json({
+      success: true,
+      checkoutUrl: session.url,
+    });
+  } catch (err) {
+    console.error('Stripe checkout error:', err.message);
+
+    res.status(500).json({
       success: false,
-      error: 'Invalid amount',
+      error: err.message,
     });
   }
+});
 
-  const data = loadData();
-  data.wallet.balance += amount;
-  saveData(data);
+app.get('/payment-success', (req, res) => {
+  res.send(`
+    <h2>Payment successful</h2>
+    <p>Your CallNaija wallet will update shortly. You can now return to the app.</p>
+  `);
+});
 
-  res.json({
-    success: true,
-    balance: data.wallet.balance.toFixed(2),
-    currency: data.wallet.currency,
-  });
+app.get('/payment-cancelled', (req, res) => {
+  res.send(`
+    <h2>Payment cancelled</h2>
+    <p>No money was taken. You can return to the app.</p>
+  `);
 });
 
 app.post('/call', async (req, res) => {
@@ -162,12 +264,6 @@ app.post('/status', (req, res) => {
   const callStatus = req.body.CallStatus;
   const duration = Number(req.body.CallDuration || 0);
 
-  console.log('--- Twilio Call Status Update ---');
-  console.log('Call SID:', callSid);
-  console.log('Status:', callStatus);
-  console.log('Duration:', duration);
-  console.log('--------------------------------');
-
   if (!callSid) {
     return res.sendStatus(200);
   }
@@ -182,7 +278,7 @@ app.post('/status', (req, res) => {
     charged: false,
   };
 
-  let data = loadData();
+  const data = loadData();
   let cost = existing.cost || '0.00';
   let charged = existing.charged || false;
 
@@ -208,8 +304,6 @@ app.post('/status', (req, res) => {
     });
 
     saveData(data);
-
-    console.log(`Charged £${cost}. New balance: £${data.wallet.balance.toFixed(2)}`);
   }
 
   callStatuses[callSid] = {
