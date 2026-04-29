@@ -54,7 +54,7 @@ class CallStatusResult {
 }
 
 class CallService {
-  static const String baseUrl = 'http://127.0.0.1:3000';
+  static const String baseUrl = 'https://callnaija-backend.onrender.com';
 
   static Future<CallResult> makeCall({
     required String callerNumber,
