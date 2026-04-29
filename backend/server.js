@@ -3,11 +3,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const twilio = require('twilio');
-const sqlite3 = require('sqlite3').verbose();
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 
-console.log('BATCH 15 SERVER LOADED - SQLITE ENABLED');
+console.log('BATCH 16 SERVER LOADED - JSON STORAGE ENABLED');
 
 app.use(cors());
 app.use(express.json());
@@ -18,67 +19,49 @@ const client = twilio(
   process.env.TWILIO_AUTH_TOKEN
 );
 
-// ===== SQLite Setup =====
-const db = new sqlite3.Database('./callnaija.db');
+const DATA_FILE = path.join(__dirname, 'data.json');
 
-// Create tables
-db.serialize(() => {
-  db.run(`
-    CREATE TABLE IF NOT EXISTS wallet (
-      id INTEGER PRIMARY KEY,
-      balance REAL,
-      currency TEXT
-    )
-  `);
+const defaultData = {
+  wallet: {
+    balance: 5.0,
+    currency: 'GBP',
+  },
+  callHistory: [],
+};
 
-  db.run(`
-    CREATE TABLE IF NOT EXISTS call_history (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      callSid TEXT,
-      fromNumber TEXT,
-      toNumber TEXT,
-      status TEXT,
-      duration INTEGER,
-      cost REAL,
-      createdAt TEXT
-    )
-  `);
+function loadData() {
+  if (!fs.existsSync(DATA_FILE)) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
+    return defaultData;
+  }
 
-  // Ensure wallet exists
-  db.get(`SELECT * FROM wallet WHERE id = 1`, (err, row) => {
-    if (!row) {
-      db.run(`INSERT INTO wallet (id, balance, currency) VALUES (1, 5.0, 'GBP')`);
-    }
-  });
-});
+  const raw = fs.readFileSync(DATA_FILE, 'utf8');
+  return JSON.parse(raw);
+}
 
-// ===== In-memory tracking =====
+function saveData(data) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
 const callStatuses = {};
-
 const RATE_PER_MINUTE = 0.10;
 const MINIMUM_BALANCE_TO_CALL = 0.20;
-
-// ===== Routes =====
 
 app.get('/', (req, res) => {
   res.send('CallNaija API is running');
 });
 
-// Get wallet
 app.get('/wallet', (req, res) => {
-  db.get(`SELECT * FROM wallet WHERE id = 1`, (err, row) => {
-    if (err) return res.status(500).json({ success: false });
+  const data = loadData();
 
-    res.json({
-      success: true,
-      balance: row.balance.toFixed(2),
-      currency: row.currency,
-      ratePerMinute: RATE_PER_MINUTE.toFixed(2),
-    });
+  res.json({
+    success: true,
+    balance: data.wallet.balance.toFixed(2),
+    currency: data.wallet.currency,
+    ratePerMinute: RATE_PER_MINUTE.toFixed(2),
   });
 });
 
-// Top up wallet
 app.post('/wallet/top-up', (req, res) => {
   const amount = Number(req.body.amount);
 
@@ -89,23 +72,17 @@ app.post('/wallet/top-up', (req, res) => {
     });
   }
 
-  db.run(
-    `UPDATE wallet SET balance = balance + ? WHERE id = 1`,
-    [amount],
-    function (err) {
-      if (err) return res.status(500).json({ success: false });
+  const data = loadData();
+  data.wallet.balance += amount;
+  saveData(data);
 
-      db.get(`SELECT balance FROM wallet WHERE id = 1`, (err, row) => {
-        res.json({
-          success: true,
-          balance: row.balance.toFixed(2),
-        });
-      });
-    }
-  );
+  res.json({
+    success: true,
+    balance: data.wallet.balance.toFixed(2),
+    currency: data.wallet.currency,
+  });
 });
 
-// Start call
 app.post('/call', async (req, res) => {
   const { callerNumber, receiverNumber } = req.body;
 
@@ -116,123 +93,169 @@ app.post('/call', async (req, res) => {
     });
   }
 
-  db.get(`SELECT balance FROM wallet WHERE id = 1`, async (err, row) => {
-    if (row.balance < MINIMUM_BALANCE_TO_CALL) {
-      return res.status(402).json({
-        success: false,
-        error: 'Insufficient balance',
-      });
-    }
+  const data = loadData();
 
-    try {
-      const call = await client.calls.create({
-        to: callerNumber,
-        from: process.env.TWILIO_PHONE_NUMBER,
-        statusCallback: `${process.env.BASE_URL}/status`,
-        statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
-        statusCallbackMethod: 'POST',
-        twiml: `<Response><Dial>${receiverNumber}</Dial></Response>`,
-      });
+  if (data.wallet.balance < MINIMUM_BALANCE_TO_CALL) {
+    return res.status(402).json({
+      success: false,
+      error: 'Insufficient balance',
+      balance: data.wallet.balance.toFixed(2),
+    });
+  }
 
-      callStatuses[call.sid] = {
-        callSid: call.sid,
-        status: 'initiated',
-        from: callerNumber,
-        to: receiverNumber,
-        charged: false,
-      };
+  try {
+    const cleanCaller = callerNumber.replace(/\s/g, '');
+    const cleanReceiver = receiverNumber.replace(/\s/g, '');
 
-      res.json({
-        success: true,
-        sid: call.sid,
-        status: 'initiated',
-      });
-    } catch (err) {
-      res.status(500).json({ success: false, error: err.message });
-    }
-  });
+    const call = await client.calls.create({
+      to: cleanCaller,
+      from: process.env.TWILIO_PHONE_NUMBER,
+      timeout: 25,
+      statusCallback: `${process.env.BASE_URL}/status`,
+      statusCallbackEvent: ['initiated', 'ringing', 'answered', 'completed'],
+      statusCallbackMethod: 'POST',
+      twiml: `
+        <Response>
+          <Say voice="alice">CallNaija is connecting your call. Please wait.</Say>
+          <Dial 
+            callerId="${process.env.TWILIO_PHONE_NUMBER}" 
+            timeout="25"
+            answerOnBridge="true"
+          >
+            <Number>${cleanReceiver}</Number>
+          </Dial>
+          <Say voice="alice">The call could not be connected.</Say>
+        </Response>
+      `,
+    });
+
+    callStatuses[call.sid] = {
+      callSid: call.sid,
+      status: 'initiated',
+      from: cleanCaller,
+      to: cleanReceiver,
+      duration: 0,
+      cost: '0.00',
+      charged: false,
+      walletBalance: data.wallet.balance.toFixed(2),
+    };
+
+    res.json({
+      success: true,
+      message: 'Bridge call started',
+      sid: call.sid,
+      status: 'initiated',
+      balance: data.wallet.balance.toFixed(2),
+    });
+  } catch (err) {
+    console.error('Twilio error:', err.message);
+
+    res.status(500).json({
+      success: false,
+      error: err.message,
+    });
+  }
 });
 
-// Status updates
 app.post('/status', (req, res) => {
   const callSid = req.body.CallSid;
-  const status = req.body.CallStatus;
+  const callStatus = req.body.CallStatus;
   const duration = Number(req.body.CallDuration || 0);
 
-  const existing = callStatuses[callSid] || {};
+  console.log('--- Twilio Call Status Update ---');
+  console.log('Call SID:', callSid);
+  console.log('Status:', callStatus);
+  console.log('Duration:', duration);
+  console.log('--------------------------------');
 
-  if (status === 'completed' && !existing.charged) {
+  if (!callSid) {
+    return res.sendStatus(200);
+  }
+
+  const existing = callStatuses[callSid] || {
+    callSid,
+    status: callStatus || 'unknown',
+    from: req.body.From || null,
+    to: req.body.To || null,
+    duration: 0,
+    cost: '0.00',
+    charged: false,
+  };
+
+  let data = loadData();
+  let cost = existing.cost || '0.00';
+  let charged = existing.charged || false;
+
+  if (callStatus === 'completed' && !charged) {
     const minutes = Math.max(1, Math.ceil(duration / 60));
-    const cost = minutes * RATE_PER_MINUTE;
+    const callCost = minutes * RATE_PER_MINUTE;
 
-    db.run(
-      `UPDATE wallet SET balance = balance - ? WHERE id = 1`,
-      [cost],
-      () => {
-        db.run(
-          `INSERT INTO call_history 
-          (callSid, fromNumber, toNumber, status, duration, cost, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            callSid,
-            existing.from,
-            existing.to,
-            status,
-            duration,
-            cost,
-            new Date().toISOString(),
-          ]
-        );
-      }
-    );
+    data.wallet.balance = Math.max(0, data.wallet.balance - callCost);
 
-    existing.charged = true;
+    cost = callCost.toFixed(2);
+    charged = true;
+
+    data.callHistory.unshift({
+      callSid,
+      from: existing.from || req.body.From || null,
+      to: existing.to || req.body.To || null,
+      status: callStatus,
+      duration,
+      cost,
+      currency: data.wallet.currency,
+      walletBalanceAfter: data.wallet.balance.toFixed(2),
+      createdAt: new Date().toISOString(),
+    });
+
+    saveData(data);
+
+    console.log(`Charged £${cost}. New balance: £${data.wallet.balance.toFixed(2)}`);
   }
 
   callStatuses[callSid] = {
     ...existing,
-    status,
+    callSid,
+    status: callStatus || 'unknown',
+    from: existing.from || req.body.From || null,
+    to: existing.to || req.body.To || null,
     duration,
+    cost,
+    charged,
+    walletBalance: data.wallet.balance.toFixed(2),
   };
 
   res.sendStatus(200);
 });
 
-// Call status
 app.get('/call-status/:sid', (req, res) => {
-  const data = callStatuses[req.params.sid];
+  const data = loadData();
+  const status = callStatuses[req.params.sid];
 
-  if (!data) {
-    return res.status(404).json({ success: false });
+  if (!status) {
+    return res.status(404).json({
+      success: false,
+      status: 'unknown',
+    });
   }
 
-  db.get(`SELECT balance FROM wallet WHERE id = 1`, (err, row) => {
-    res.json({
-      success: true,
-      status: data.status,
-      duration: data.duration,
-      cost: data.cost,
-      walletBalance: row.balance.toFixed(2),
-    });
+  res.json({
+    success: true,
+    ...status,
+    walletBalance: data.wallet.balance.toFixed(2),
   });
 });
 
-// Call history
 app.get('/call-history', (req, res) => {
-  db.all(
-    `SELECT * FROM call_history ORDER BY createdAt DESC`,
-    [],
-    (err, rows) => {
-      res.json({
-        success: true,
-        history: rows,
-      });
-    }
-  );
+  const data = loadData();
+
+  res.json({
+    success: true,
+    history: data.callHistory,
+  });
 });
 
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
