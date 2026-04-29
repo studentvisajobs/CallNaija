@@ -51,6 +51,32 @@ function saveData(data) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
+function creditWalletFromSession(session) {
+  const paymentId = session.payment_intent || session.id;
+  const amount = Number(session.metadata?.amount || 0);
+
+  if (amount <= 0) return;
+
+  const data = loadData();
+
+  if (!data.processedPayments.includes(paymentId)) {
+    data.wallet.balance += amount;
+
+    data.topUpHistory.unshift({
+      paymentId,
+      amount: amount.toFixed(2),
+      currency: 'GBP',
+      status: 'completed',
+      createdAt: new Date().toISOString(),
+    });
+
+    data.processedPayments.push(paymentId);
+    saveData(data);
+
+    console.log(`Wallet credited: £${amount.toFixed(2)}`);
+  }
+}
+
 // Stripe webhook needs raw body before express.json()
 app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (req, res) => {
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -69,30 +95,7 @@ app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (req, res
   }
 
   if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const paymentId = session.payment_intent || session.id;
-    const amount = Number(session.metadata?.amount || 0);
-
-    if (amount > 0) {
-      const data = loadData();
-
-      if (!data.processedPayments.includes(paymentId)) {
-        data.wallet.balance += amount;
-
-        data.topUpHistory.unshift({
-          paymentId,
-          amount: amount.toFixed(2),
-          currency: 'GBP',
-          status: 'completed',
-          createdAt: new Date().toISOString(),
-        });
-
-        data.processedPayments.push(paymentId);
-        saveData(data);
-
-        console.log(`Stripe top-up complete: £${amount.toFixed(2)}`);
-      }
-    }
+    creditWalletFromSession(event.data.object);
   }
 
   res.sendStatus(200);
@@ -138,7 +141,7 @@ app.post('/create-checkout-session', async (req, res) => {
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
       payment_method_types: ['card'],
-      success_url: `${baseUrl}/payment-success`,
+      success_url: `${baseUrl}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: `${baseUrl}/payment-cancelled`,
       line_items: [
         {
@@ -171,11 +174,35 @@ app.post('/create-checkout-session', async (req, res) => {
   }
 });
 
-app.get('/payment-success', (req, res) => {
-  res.send(`
-    <h2>Payment successful</h2>
-    <p>Your CallNaija wallet will update shortly. You can now return to the app.</p>
-  `);
+app.get('/payment-success', async (req, res) => {
+  try {
+    const sessionId = req.query.session_id;
+
+    if (!sessionId) {
+      return res.send(`
+        <h2>Payment successful</h2>
+        <p>Missing session ID. Please return to the app and refresh wallet.</p>
+      `);
+    }
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+    if (session.payment_status === 'paid') {
+      creditWalletFromSession(session);
+    }
+
+    res.send(`
+      <h2>Payment successful</h2>
+      <p>Your CallNaija wallet has been updated. You can now return to the app.</p>
+    `);
+  } catch (err) {
+    console.error('Payment success error:', err.message);
+
+    res.send(`
+      <h2>Payment received</h2>
+      <p>We could not update the wallet immediately. Please return to the app and refresh.</p>
+    `);
+  }
 });
 
 app.get('/payment-cancelled', (req, res) => {
