@@ -205,10 +205,40 @@ app.get('/payment-success', async (req, res) => {
   }
 });
 
-app.get('/payment-cancelled', (req, res) => {
+app.get('/payment-success', (req, res) => {
   res.send(`
-    <h2>Payment cancelled</h2>
-    <p>No money was taken. You can return to the app.</p>
+    <html>
+      <head>
+        <title>Payment Successful</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            padding: 40px;
+            background: #f6fbf7;
+          }
+          h2 {
+            color: #0A7C3A;
+          }
+          p {
+            color: #444;
+            margin-top: 10px;
+          }
+        </style>
+      </head>
+      <body>
+        <h2>Payment successful 🎉</h2>
+        <p>Your wallet has been updated.</p>
+        <p>You can now return to the app.</p>
+
+        <script>
+          setTimeout(() => {
+            window.close();
+          }, 3000);
+        </script>
+      </body>
+    </html>
   `);
 });
 
