@@ -8,7 +8,21 @@ const bcrypt = require('bcryptjs');
 const fs = require('fs');
 const path = require('path');
 
+const http = require('http');
+const { Server } = require('socket.io'); 
+
 const app = express();
+
+const server = http.createServer(app);
+
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
+
+const onlineUsers = {};
 
 console.log('CALLNAIJA SERVER LOADED - OTP ENABLED');
 
@@ -758,6 +772,90 @@ app.get('/call-history', (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 
-app.listen(PORT, () => {
+io.on('connection', (socket) => {
+  console.log('Socket connected:', socket.id);
+
+  socket.on('user-online', ({ phone, name }) => {
+    if (!phone) return;
+
+    onlineUsers[phone] = {
+      socketId: socket.id,
+      phone,
+      name: name || phone,
+    };
+
+    console.log('User online:', phone);
+    io.emit('online-users', Object.values(onlineUsers));
+  });
+
+  socket.on('call-user', ({ fromPhone, fromName, toPhone, offer }) => {
+    const target = onlineUsers[toPhone];
+
+    if (!target) {
+      socket.emit('call-error', {
+        message: 'User is not online',
+      });
+      return;
+    }
+
+    io.to(target.socketId).emit('incoming-call', {
+      fromPhone,
+      fromName,
+      offer,
+    });
+  });
+
+  socket.on('answer-call', ({ toPhone, answer }) => {
+    const target = onlineUsers[toPhone];
+
+    if (target) {
+      io.to(target.socketId).emit('call-answered', {
+        answer,
+      });
+    }
+  });
+
+  socket.on('reject-call', ({ toPhone }) => {
+    const target = onlineUsers[toPhone];
+
+    if (target) {
+      io.to(target.socketId).emit('call-rejected');
+    }
+  });
+
+  socket.on('ice-candidate', ({ toPhone, candidate }) => {
+    const target = onlineUsers[toPhone];
+
+    if (target) {
+      io.to(target.socketId).emit('ice-candidate', {
+        candidate,
+      });
+    }
+  });
+
+  socket.on('end-call', ({ toPhone }) => {
+    const target = onlineUsers[toPhone];
+
+    if (target) {
+      io.to(target.socketId).emit('call-ended');
+    }
+  });
+
+  socket.on('disconnect', () => {
+    const phone = Object.keys(onlineUsers).find(
+      (key) => onlineUsers[key].socketId === socket.id
+    );
+
+    if (phone) {
+      delete onlineUsers[phone];
+      console.log('User offline:', phone);
+      io.emit('online-users', Object.values(onlineUsers));
+    }
+
+    console.log('Socket disconnected:', socket.id);
+  });
+});
+
+server.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
