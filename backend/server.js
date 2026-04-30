@@ -9,7 +9,7 @@ const path = require('path');
 
 const app = express();
 
-console.log('PAYMENTS SERVER LOADED - STRIPE CHECKOUT ENABLED');
+console.log('CALLNAIJA SERVER LOADED');
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -33,7 +33,7 @@ const defaultData = {
 function loadData() {
   if (!fs.existsSync(DATA_FILE)) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(defaultData, null, 2));
-    return { ...defaultData };
+    return JSON.parse(JSON.stringify(defaultData));
   }
 
   const raw = fs.readFileSync(DATA_FILE, 'utf8');
@@ -59,47 +59,58 @@ function creditWalletFromSession(session) {
 
   const data = loadData();
 
-  if (!data.processedPayments.includes(paymentId)) {
-    data.wallet.balance += amount;
-
-    data.topUpHistory.unshift({
-      paymentId,
-      amount: amount.toFixed(2),
-      currency: 'GBP',
-      status: 'completed',
-      createdAt: new Date().toISOString(),
-    });
-
-    data.processedPayments.push(paymentId);
-    saveData(data);
-
-    console.log(`Wallet credited: £${amount.toFixed(2)}`);
+  if (data.processedPayments.includes(paymentId)) {
+    console.log('Payment already processed:', paymentId);
+    return;
   }
+
+  data.wallet.balance += amount;
+
+  data.topUpHistory.unshift({
+    paymentId,
+    amount: amount.toFixed(2),
+    currency: 'GBP',
+    status: 'completed',
+    createdAt: new Date().toISOString(),
+  });
+
+  data.processedPayments.push(paymentId);
+  saveData(data);
+
+  console.log(`Wallet credited: £${amount.toFixed(2)}`);
 }
 
-// Stripe webhook needs raw body before express.json()
-app.post('/stripe-webhook', express.raw({ type: 'application/json' }), (req, res) => {
-  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
-  let event;
+// Stripe webhook must come before express.json()
+app.post(
+  '/stripe-webhook',
+  express.raw({ type: 'application/json' }),
+  (req, res) => {
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    let event;
 
-  try {
-    if (webhookSecret) {
-      const signature = req.headers['stripe-signature'];
-      event = stripe.webhooks.constructEvent(req.body, signature, webhookSecret);
-    } else {
-      event = JSON.parse(req.body.toString());
+    try {
+      if (webhookSecret) {
+        const signature = req.headers['stripe-signature'];
+        event = stripe.webhooks.constructEvent(
+          req.body,
+          signature,
+          webhookSecret
+        );
+      } else {
+        event = JSON.parse(req.body.toString());
+      }
+    } catch (err) {
+      console.error('Stripe webhook error:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
     }
-  } catch (err) {
-    console.error('Stripe webhook error:', err.message);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
 
-  if (event.type === 'checkout.session.completed') {
-    creditWalletFromSession(event.data.object);
-  }
+    if (event.type === 'checkout.session.completed') {
+      creditWalletFromSession(event.data.object);
+    }
 
-  res.sendStatus(200);
-});
+    res.sendStatus(200);
+  }
+);
 
 app.use(cors());
 app.use(express.json());
@@ -136,7 +147,8 @@ app.post('/create-checkout-session', async (req, res) => {
       });
     }
 
-    const baseUrl = process.env.BASE_URL || 'https://callnaija-backend.onrender.com';
+    const baseUrl =
+      process.env.BASE_URL || 'https://callnaija-backend.onrender.com';
 
     const session = await stripe.checkout.sessions.create({
       mode: 'payment',
@@ -178,38 +190,152 @@ app.get('/payment-success', async (req, res) => {
   try {
     const sessionId = req.query.session_id;
 
-    if (!sessionId) {
-      return res.send(`
-        <h2>Payment successful</h2>
-        <p>Missing session ID. Please return to the app and refresh wallet.</p>
-      `);
-    }
+    if (sessionId) {
+      const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-    const session = await stripe.checkout.sessions.retrieve(sessionId);
-
-    if (session.payment_status === 'paid') {
-      creditWalletFromSession(session);
+      if (session.payment_status === 'paid') {
+        creditWalletFromSession(session);
+      }
     }
 
     res.send(`
-      <h2>Payment successful</h2>
-      <p>Your CallNaija wallet has been updated. You can now return to the app.</p>
+      <html>
+        <head>
+          <title>Payment Successful</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 40px;
+              background: #f6fbf7;
+            }
+
+            .card {
+              max-width: 420px;
+              margin: 0 auto;
+              background: white;
+              border-radius: 24px;
+              padding: 32px 24px;
+              box-shadow: 0 12px 30px rgba(0,0,0,0.08);
+            }
+
+            .icon {
+              width: 72px;
+              height: 72px;
+              border-radius: 50%;
+              background: #0A7C3A;
+              color: white;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              margin: 0 auto 18px;
+              font-size: 36px;
+            }
+
+            h2 {
+              color: #0A7C3A;
+              margin-bottom: 10px;
+            }
+
+            p {
+              color: #444;
+              line-height: 1.5;
+            }
+
+            .small {
+              font-size: 13px;
+              color: #777;
+              margin-top: 18px;
+            }
+
+            button {
+              margin-top: 18px;
+              background: #0A7C3A;
+              color: white;
+              border: none;
+              padding: 14px 22px;
+              border-radius: 999px;
+              font-weight: bold;
+              font-size: 15px;
+            }
+          </style>
+        </head>
+
+        <body>
+          <div class="card">
+            <div class="icon">✓</div>
+            <h2>Payment successful</h2>
+            <p>Your CallNaija wallet has been updated.</p>
+            <p>You can now return to the app.</p>
+
+            <button onclick="window.close()">Close this page</button>
+
+            <p class="small">
+              If this page does not close automatically, go back to CallNaija.
+            </p>
+          </div>
+
+          <script>
+            setTimeout(() => {
+              window.close();
+            }, 3000);
+          </script>
+        </body>
+      </html>
     `);
   } catch (err) {
     console.error('Payment success error:', err.message);
 
     res.send(`
-      <h2>Payment received</h2>
-      <p>We could not update the wallet immediately. Please return to the app and refresh.</p>
+      <html>
+        <head>
+          <title>Payment Received</title>
+          <meta name="viewport" content="width=device-width, initial-scale=1.0">
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              text-align: center;
+              padding: 40px;
+              background: #f6fbf7;
+            }
+
+            .card {
+              max-width: 420px;
+              margin: 0 auto;
+              background: white;
+              border-radius: 24px;
+              padding: 32px 24px;
+              box-shadow: 0 12px 30px rgba(0,0,0,0.08);
+            }
+
+            h2 {
+              color: #0A7C3A;
+            }
+
+            p {
+              color: #444;
+              line-height: 1.5;
+            }
+          </style>
+        </head>
+
+        <body>
+          <div class="card">
+            <h2>Payment received</h2>
+            <p>Please return to the app and refresh your wallet.</p>
+          </div>
+        </body>
+      </html>
     `);
   }
 });
 
-app.get('/payment-success', (req, res) => {
+app.get('/payment-cancelled', (req, res) => {
   res.send(`
     <html>
       <head>
-        <title>Payment Successful</title>
+        <title>Payment Cancelled</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
           body {
@@ -218,25 +344,31 @@ app.get('/payment-success', (req, res) => {
             padding: 40px;
             background: #f6fbf7;
           }
-          h2 {
-            color: #0A7C3A;
+
+          .card {
+            max-width: 420px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 24px;
+            padding: 32px 24px;
+            box-shadow: 0 12px 30px rgba(0,0,0,0.08);
           }
+
+          h2 {
+            color: #103D24;
+          }
+
           p {
             color: #444;
-            margin-top: 10px;
           }
         </style>
       </head>
-      <body>
-        <h2>Payment successful 🎉</h2>
-        <p>Your wallet has been updated.</p>
-        <p>You can now return to the app.</p>
 
-        <script>
-          setTimeout(() => {
-            window.close();
-          }, 3000);
-        </script>
+      <body>
+        <div class="card">
+          <h2>Payment cancelled</h2>
+          <p>No money was taken. You can return to CallNaija.</p>
+        </div>
       </body>
     </html>
   `);
