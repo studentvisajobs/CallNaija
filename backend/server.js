@@ -10,7 +10,7 @@ const path = require('path');
 
 const app = express();
 
-console.log('CALLNAIJA SERVER LOADED - USER ACCOUNTS ENABLED');
+console.log('CALLNAIJA SERVER LOADED - OTP ENABLED');
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -18,6 +18,8 @@ const client = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
+
+const VERIFY_SERVICE_SID = process.env.TWILIO_VERIFY_SERVICE_SID;
 
 const DATA_FILE = path.join(__dirname, 'data.json');
 
@@ -54,6 +56,7 @@ function publicUser(user) {
     id: user.id,
     name: user.name,
     phone: user.phone,
+    isVerified: user.isVerified === true,
     wallet: user.wallet,
   };
 }
@@ -85,7 +88,41 @@ function requireUser(req, res) {
     return null;
   }
 
+  if (user.isVerified !== true) {
+    res.status(403).json({
+      success: false,
+      error: 'Phone number not verified',
+    });
+    return null;
+  }
+
   return { data, user };
+}
+
+async function sendOtpToPhone(phone) {
+  if (!VERIFY_SERVICE_SID) {
+    throw new Error('TWILIO_VERIFY_SERVICE_SID is missing');
+  }
+
+  return client.verify.v2
+    .services(VERIFY_SERVICE_SID)
+    .verifications.create({
+      to: phone,
+      channel: 'sms',
+    });
+}
+
+async function checkOtpCode(phone, code) {
+  if (!VERIFY_SERVICE_SID) {
+    throw new Error('TWILIO_VERIFY_SERVICE_SID is missing');
+  }
+
+  return client.verify.v2
+    .services(VERIFY_SERVICE_SID)
+    .verificationChecks.create({
+      to: phone,
+      code,
+    });
 }
 
 function creditWalletFromSession(session) {
@@ -124,7 +161,6 @@ function creditWalletFromSession(session) {
   console.log(`Wallet credited for ${phone}: £${amount.toFixed(2)}`);
 }
 
-// Stripe webhook must come before express.json()
 app.post(
   '/stripe-webhook',
   express.raw({ type: 'application/json' }),
@@ -204,6 +240,7 @@ app.post('/register', async (req, res) => {
       name,
       phone,
       passwordHash,
+      isVerified: false,
       wallet: {
         balance: 0.0,
         currency: 'GBP',
@@ -216,9 +253,12 @@ app.post('/register', async (req, res) => {
     data.users.push(user);
     saveData(data);
 
+    await sendOtpToPhone(phone);
+
     res.json({
       success: true,
-      message: 'Account created',
+      message: 'Account created. Verification code sent.',
+      requiresVerification: true,
       user: publicUser(user),
     });
   } catch (err) {
@@ -226,7 +266,95 @@ app.post('/register', async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: 'Could not create account',
+      error: err.message || 'Could not create account',
+    });
+  }
+});
+
+app.post('/send-otp', async (req, res) => {
+  try {
+    const phone = cleanPhone(req.body.phone);
+
+    if (!phone) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone number is required',
+      });
+    }
+
+    const data = loadData();
+    const user = findUserByPhone(data, phone);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'Account not found',
+      });
+    }
+
+    await sendOtpToPhone(phone);
+
+    res.json({
+      success: true,
+      message: 'Verification code sent',
+    });
+  } catch (err) {
+    console.error('Send OTP error:', err.message);
+
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Could not send verification code',
+    });
+  }
+});
+
+app.post('/verify-otp', async (req, res) => {
+  try {
+    const phone = cleanPhone(req.body.phone);
+    const code = String(req.body.code || '').trim();
+
+    if (!phone || !code) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone and code are required',
+      });
+    }
+
+    const check = await checkOtpCode(phone, code);
+
+    if (check.status !== 'approved') {
+      return res.status(400).json({
+        success: false,
+        error: 'Invalid verification code',
+      });
+    }
+
+    const data = loadData();
+    const user = findUserByPhone(data, phone);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'Account not found',
+      });
+    }
+
+    user.isVerified = true;
+    user.verifiedAt = new Date().toISOString();
+
+    saveData(data);
+
+    res.json({
+      success: true,
+      message: 'Phone verified',
+      user: publicUser(user),
+    });
+  } catch (err) {
+    console.error('Verify OTP error:', err.message);
+
+    res.status(500).json({
+      success: false,
+      error: err.message || 'Could not verify code',
     });
   }
 });
@@ -262,6 +390,17 @@ app.post('/login', async (req, res) => {
       });
     }
 
+    if (user.isVerified !== true) {
+      await sendOtpToPhone(phone);
+
+      return res.status(403).json({
+        success: false,
+        requiresVerification: true,
+        phone,
+        error: 'Phone number not verified. Verification code sent.',
+      });
+    }
+
     res.json({
       success: true,
       message: 'Login successful',
@@ -272,7 +411,7 @@ app.post('/login', async (req, res) => {
 
     res.status(500).json({
       success: false,
-      error: 'Could not login',
+      error: err.message || 'Could not login',
     });
   }
 });
@@ -312,6 +451,13 @@ app.post('/create-checkout-session', async (req, res) => {
       return res.status(401).json({
         success: false,
         error: 'User not found',
+      });
+    }
+
+    if (user.isVerified !== true) {
+      return res.status(403).json({
+        success: false,
+        error: 'Phone number not verified',
       });
     }
 
@@ -447,6 +593,13 @@ app.post('/call', async (req, res) => {
     return res.status(401).json({
       success: false,
       error: 'User not found',
+    });
+  }
+
+  if (user.isVerified !== true) {
+    return res.status(403).json({
+      success: false,
+      error: 'Phone number not verified',
     });
   }
 
