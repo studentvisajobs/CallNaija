@@ -1,6 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'app_call_service.dart';
+import 'incoming_call_screen.dart';
+import 'free_call_screen.dart';
+
 import 'dial_screen.dart';
 import 'call_service.dart';
 import 'call_history_screen.dart';
@@ -21,17 +25,7 @@ class CallNaijaApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         scaffoldBackgroundColor: const Color(0xFFF5FBF7),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF0A7C3A),
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            elevation: 0,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(18),
-            ),
-          ),
-        ),
+        colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF0A7C3A)),
       ),
       home: const SplashScreen(),
     );
@@ -54,7 +48,6 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> checkLogin() async {
     final loggedIn = await CallService.loadSavedUser();
-
     await Future.delayed(const Duration(milliseconds: 900));
 
     if (!mounted) return;
@@ -72,20 +65,13 @@ class _SplashScreenState extends State<SplashScreen> {
     return const Scaffold(
       backgroundColor: Color(0xFF0A7C3A),
       body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.call, color: Colors.white, size: 64),
-            SizedBox(height: 16),
-            Text(
-              'CallNaija',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
-              ),
-            ),
-          ],
+        child: Text(
+          'CallNaija',
+          style: TextStyle(
+            color: Colors.white,
+            fontSize: 28,
+            fontWeight: FontWeight.w900,
+          ),
         ),
       ),
     );
@@ -113,6 +99,52 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
     callerController.text = CallService.currentUserPhone ?? '';
     loadWallet();
+    connectToFreeCallService();
+  }
+
+  void connectToFreeCallService() {
+    final phone = CallService.currentUserPhone;
+    final name = CallService.currentUserName ?? 'CallNaija User';
+
+    if (phone == null || phone.isEmpty) return;
+
+    AppCallService.connect(phone: phone, name: name);
+
+    AppCallService.onIncomingCall((data) {
+      if (!mounted) return;
+
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => IncomingCallScreen(
+            fromPhone: data['fromPhone']?.toString() ?? '',
+            fromName: data['fromName']?.toString() ?? 'Incoming call',
+            offer: data['offer'],
+          ),
+        ),
+      );
+    });
+
+    AppCallService.onCallRejected(() {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Call rejected')),
+      );
+    });
+
+    AppCallService.onCallAnswered((data) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Call answered')),
+      );
+    });
+
+    AppCallService.onCallEnded(() {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Call ended')),
+      );
+    });
   }
 
   @override
@@ -120,21 +152,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     callerController.dispose();
     super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      loadWallet();
-
-      if (paymentInProgress) {
-        setState(() => paymentInProgress = false);
-
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Wallet refreshed')),
-        );
-      }
-    }
   }
 
   Future<void> loadWallet() async {
@@ -153,12 +170,7 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       });
     } catch (_) {
       if (!mounted) return;
-
       setState(() => walletLoading = false);
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Could not refresh wallet')),
-      );
     }
   }
 
@@ -170,32 +182,24 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
 
     try {
       final checkoutUrl = await CallService.createCheckoutSession(amount);
-      final uri = Uri.parse(checkoutUrl);
-
       final opened = await launchUrl(
-        uri,
+        Uri.parse(checkoutUrl),
         mode: LaunchMode.externalApplication,
       );
 
-      if (!opened) {
-        throw Exception('Could not open Stripe checkout');
-      }
+      if (!opened) throw Exception('Could not open Stripe checkout');
 
       Future.delayed(const Duration(seconds: 3), loadWallet);
       Future.delayed(const Duration(seconds: 6), loadWallet);
       Future.delayed(const Duration(seconds: 10), loadWallet);
     } catch (e) {
       if (!mounted) return;
-
       setState(() => paymentInProgress = false);
-
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Payment failed: $e')),
       );
     } finally {
-      if (mounted) {
-        setState(() => paymentLoading = false);
-      }
+      if (mounted) setState(() => paymentLoading = false);
     }
   }
 
@@ -226,28 +230,17 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   }
 
   Widget topUpOption(double amount) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF2F8F4),
-        borderRadius: BorderRadius.circular(18),
+    return ListTile(
+      leading: const CircleAvatar(
+        backgroundColor: Color(0xFF0A7C3A),
+        child: Icon(Icons.add, color: Colors.white),
       ),
-      child: ListTile(
-        leading: const CircleAvatar(
-          backgroundColor: Color(0xFF0A7C3A),
-          child: Icon(Icons.add, color: Colors.white),
-        ),
-        title: Text(
-          'Add £${amount.toStringAsFixed(0)}',
-          style: const TextStyle(fontWeight: FontWeight.w800),
-        ),
-        subtitle: const Text('Secure payment with Stripe'),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: () {
-          Navigator.pop(context);
-          startStripeTopUp(amount);
-        },
-      ),
+      title: Text('Add £${amount.toStringAsFixed(0)}'),
+      subtitle: const Text('Secure payment with Stripe'),
+      onTap: () {
+        Navigator.pop(context);
+        startStripeTopUp(amount);
+      },
     );
   }
 
@@ -313,13 +306,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                         decoration: BoxDecoration(
                           color: const Color(0xFF0A7C3A),
                           borderRadius: BorderRadius.circular(18),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.green.withOpacity(0.22),
-                              blurRadius: 18,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
                         ),
                         child: const Icon(Icons.call, color: Colors.white),
                       ),
@@ -340,7 +326,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                               'Welcome, $userName',
                               style: const TextStyle(
                                 color: Color(0xFF607568),
-                                fontSize: 14,
                               ),
                             ),
                           ],
@@ -359,38 +344,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     padding: const EdgeInsets.all(26),
                     decoration: BoxDecoration(
                       gradient: const LinearGradient(
-                        colors: [
-                          Color(0xFF0A7C3A),
-                          Color(0xFF0E8F45),
-                        ],
-                        begin: Alignment.topLeft,
-                        end: Alignment.bottomRight,
+                        colors: [Color(0xFF0A7C3A), Color(0xFF0E8F45)],
                       ),
                       borderRadius: BorderRadius.circular(32),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.green.withOpacity(0.24),
-                          blurRadius: 30,
-                          offset: const Offset(0, 16),
-                        ),
-                      ],
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Row(
-                          children: [
-                            Icon(
-                              Icons.account_balance_wallet,
-                              color: Colors.white70,
-                              size: 20,
-                            ),
-                            SizedBox(width: 8),
-                            Text(
-                              'Wallet balance',
-                              style: TextStyle(color: Colors.white70),
-                            ),
-                          ],
+                        const Text(
+                          'Wallet balance',
+                          style: TextStyle(color: Colors.white70),
                         ),
                         const SizedBox(height: 10),
                         Text(
@@ -406,25 +369,16 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                           width: double.infinity,
                           child: ElevatedButton.icon(
                             onPressed: paymentLoading ? null : showTopUpOptions,
-                            icon: paymentLoading
-                                ? const SizedBox(
-                                    width: 18,
-                                    height: 18,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                : const Icon(Icons.add_card),
+                            icon: const Icon(Icons.add_card),
                             label: Text(
-                              paymentLoading ? 'Opening Stripe...' : 'Top Up Wallet',
+                              paymentLoading
+                                  ? 'Opening Stripe...'
+                                  : 'Top Up Wallet',
                             ),
                             style: ElevatedButton.styleFrom(
                               backgroundColor: Colors.white,
                               foregroundColor: const Color(0xFF0A7C3A),
                               padding: const EdgeInsets.symmetric(vertical: 15),
-                              textStyle: const TextStyle(
-                                fontWeight: FontWeight.w800,
-                              ),
                             ),
                           ),
                         ),
@@ -435,7 +389,6 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                   const SizedBox(height: 28),
 
                   sectionTitle('Your phone number'),
-
                   const SizedBox(height: 8),
 
                   TextField(
@@ -443,15 +396,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     keyboardType: TextInputType.phone,
                     decoration: InputDecoration(
                       hintText: '+447123456789',
-                      helperText: 'This is the number CallNaija will call first.',
+                      helperText:
+                          'This is the number CallNaija will call first.',
                       helperMaxLines: 2,
                       prefixIcon: const Icon(Icons.phone),
                       filled: true,
                       fillColor: Colors.white,
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 18,
-                        vertical: 18,
-                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(22),
                         borderSide: BorderSide.none,
@@ -465,15 +415,23 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onPressed: openDialScreen,
                     icon: const Icon(Icons.call),
                     label: const Text('Call Nigeria'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0A7C3A),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(vertical: 18),
-                      textStyle: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                      ),
-                    ),
+                    style: primaryButtonStyle(),
+                  ),
+
+                  const SizedBox(height: 12),
+
+                  OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => const FreeCallScreen(),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.wifi_calling_3),
+                    label: const Text('Free App Call'),
+                    style: outlineButtonStyle(),
                   ),
 
                   const SizedBox(height: 12),
@@ -482,21 +440,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
                     onPressed: openCallHistory,
                     icon: const Icon(Icons.history),
                     label: const Text('Call History'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: const Color(0xFF0A7C3A),
-                      side: const BorderSide(color: Color(0xFF0A7C3A)),
-                      padding: const EdgeInsets.symmetric(vertical: 18),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(18),
-                      ),
-                      textStyle: const TextStyle(fontWeight: FontWeight.w800),
-                    ),
+                    style: outlineButtonStyle(),
                   ),
 
                   const SizedBox(height: 28),
 
                   sectionTitle('How it works'),
-
                   const SizedBox(height: 12),
                   infoTile(Icons.phone_callback, 'We call your phone first'),
                   infoTile(Icons.public, 'Then connect you to Nigeria'),
@@ -507,6 +456,25 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
           ),
         ),
       ),
+    );
+  }
+
+  ButtonStyle primaryButtonStyle() {
+    return ElevatedButton.styleFrom(
+      backgroundColor: const Color(0xFF0A7C3A),
+      foregroundColor: Colors.white,
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+    );
+  }
+
+  ButtonStyle outlineButtonStyle() {
+    return OutlinedButton.styleFrom(
+      foregroundColor: const Color(0xFF0A7C3A),
+      side: const BorderSide(color: Color(0xFF0A7C3A)),
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+      textStyle: const TextStyle(fontWeight: FontWeight.w800),
     );
   }
 
@@ -528,24 +496,12 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(22),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.03),
-            blurRadius: 14,
-            offset: const Offset(0, 8),
-          ),
-        ],
       ),
       child: Row(
         children: [
           Icon(icon, color: const Color(0xFF0A7C3A)),
           const SizedBox(width: 14),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(fontSize: 15),
-            ),
-          ),
+          Expanded(child: Text(text)),
         ],
       ),
     );
