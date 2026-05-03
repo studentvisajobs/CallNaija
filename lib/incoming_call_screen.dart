@@ -13,7 +13,7 @@ class IncomingCallScreen extends StatefulWidget {
     super.key,
     required this.fromPhone,
     required this.fromName,
-    this.offer,
+    required this.offer,
   });
 
   @override
@@ -21,13 +21,25 @@ class IncomingCallScreen extends StatefulWidget {
 }
 
 class _IncomingCallScreenState extends State<IncomingCallScreen> {
-  bool accepting = false;
+  bool connecting = false;
+  bool connected = false;
 
   Future<void> acceptCall() async {
     try {
-      setState(() => accepting = true);
+      setState(() => connecting = true);
 
       await WebRTCService.init();
+
+      WebRTCService.onRemoteStreamReady = () async {
+        await WebRTCService.enableSpeaker();
+
+        if (!mounted) return;
+
+        setState(() {
+          connected = true;
+          connecting = false;
+        });
+      };
 
       WebRTCService.onIceCandidate = (candidate) {
         AppCallService.sendIceCandidate(
@@ -36,9 +48,15 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
         );
       };
 
+      final offerData = widget.offer ?? AppCallService.latestOffer;
+
+      if (offerData == null) {
+        throw Exception('No WebRTC offer received');
+      }
+
       final offer = RTCSessionDescription(
-        widget.offer['sdp'],
-        widget.offer['type'],
+        offerData['sdp'],
+        offerData['type'],
       );
 
       await WebRTCService.setRemoteDescription(offer);
@@ -52,19 +70,20 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
       if (!mounted) return;
 
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Call connected')),
-      );
+      setState(() {
+        connecting = false;
+      });
     } catch (e) {
       if (!mounted) return;
 
+      setState(() {
+        connecting = false;
+        connected = false;
+      });
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not accept call: $e')),
+        SnackBar(content: Text('Failed to accept call: $e')),
       );
-    } finally {
-      if (mounted) {
-        setState(() => accepting = false);
-      }
     }
   }
 
@@ -86,7 +105,6 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
 
     AppCallService.onIceCandidate((data) async {
       final candidateData = data['candidate'];
-
       if (candidateData == null) return;
 
       final candidate = RTCIceCandidate(
@@ -116,62 +134,93 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0A7C3A),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.call, size: 80, color: Colors.white),
-              const SizedBox(height: 20),
-              Text(
-                widget.fromName,
-                style: const TextStyle(
+      body: SafeArea(
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                width: double.infinity,
+                height: 120,
+                margin: const EdgeInsets.only(bottom: 18),
+                decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(18),
+                ),
+                child: RTCVideoView(
+                    WebRTCService.remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                ),
+                ),
+
+                Icon(
+                  connected ? Icons.volume_up : Icons.call,
                   color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
+                  size: 80,
                 ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                widget.fromPhone,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 16,
+
+                const SizedBox(height: 20),
+
+                Text(
+                  widget.fromName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 26,
+                    fontWeight: FontWeight.w900,
+                  ),
                 ),
-              ),
-              const SizedBox(height: 40),
-              if (!accepting)
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: [
-                    FloatingActionButton(
-                      backgroundColor: Colors.red,
-                      onPressed: rejectCall,
-                      child: const Icon(Icons.call_end),
-                    ),
-                    FloatingActionButton(
-                      backgroundColor: Colors.green,
-                      onPressed: acceptCall,
-                      child: const Icon(Icons.call),
-                    ),
-                  ],
+
+                const SizedBox(height: 6),
+
+                Text(
+                  widget.fromPhone,
+                  style: const TextStyle(color: Colors.white70),
                 ),
-              if (accepting)
-                const CircularProgressIndicator(
-                  color: Colors.white,
+
+                const SizedBox(height: 12),
+
+                Text(
+                  connected
+                      ? 'Connected — audio active'
+                      : connecting
+                          ? 'Connecting audio...'
+                          : 'Incoming free call',
+                  style: const TextStyle(color: Colors.white70),
                 ),
-              const SizedBox(height: 32),
-              ElevatedButton.icon(
-                onPressed: endCall,
-                icon: const Icon(Icons.call_end),
-                label: const Text('End Call'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.red,
-                ),
-              ),
-            ],
+
+                const SizedBox(height: 40),
+
+                if (!connecting && !connected)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      FloatingActionButton(
+                        backgroundColor: Colors.red,
+                        onPressed: rejectCall,
+                        child: const Icon(Icons.call_end),
+                      ),
+                      const SizedBox(width: 40),
+                      FloatingActionButton(
+                        backgroundColor: Colors.green,
+                        onPressed: acceptCall,
+                        child: const Icon(Icons.call),
+                      ),
+                    ],
+                  ),
+
+                if (connecting)
+                  const CircularProgressIndicator(color: Colors.white),
+
+                if (connected)
+                  FloatingActionButton(
+                    backgroundColor: Colors.red,
+                    onPressed: endCall,
+                    child: const Icon(Icons.call_end),
+                  ),
+              ],
+            ),
           ),
         ),
       ),

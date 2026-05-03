@@ -16,6 +16,7 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
   final phoneController = TextEditingController();
 
   bool calling = false;
+  bool connected = false;
   String callStatus = 'Enter a CallNaija user phone number';
 
   Future<void> startFreeCall() async {
@@ -41,10 +42,22 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
     try {
       setState(() {
         calling = true;
+        connected = false;
         callStatus = 'Calling $toPhone...';
       });
 
       await WebRTCService.init();
+
+      WebRTCService.onRemoteStreamReady = () async {
+        await WebRTCService.enableSpeaker();
+
+        if (!mounted) return;
+
+        setState(() {
+          connected = true;
+          callStatus = 'Connected — audio active';
+        });
+      };
 
       WebRTCService.onIceCandidate = (candidate) {
         AppCallService.sendIceCandidate(
@@ -62,8 +75,11 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
         offer: offer.toMap(),
       );
     } catch (e) {
+      WebRTCService.dispose();
+
       setState(() {
         calling = false;
+        connected = false;
         callStatus = 'Call failed';
       });
 
@@ -84,6 +100,7 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
 
     setState(() {
       calling = false;
+      connected = false;
       callStatus = 'Call ended';
     });
   }
@@ -104,17 +121,18 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
         );
 
         await WebRTCService.setRemoteDescription(answer);
+        await WebRTCService.enableSpeaker();
       }
 
       setState(() {
         calling = true;
-        callStatus = 'Connected';
+        callStatus =
+            connected ? 'Connected — audio active' : 'Connecting audio...';
       });
     });
 
     AppCallService.onIceCandidate((data) async {
       final candidateData = data['candidate'];
-
       if (candidateData == null) return;
 
       final candidate = RTCIceCandidate(
@@ -133,6 +151,7 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
 
       setState(() {
         calling = false;
+        connected = false;
         callStatus = 'Call rejected';
       });
     });
@@ -144,6 +163,7 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
 
       setState(() {
         calling = false;
+        connected = false;
         callStatus = 'Call ended';
       });
     });
@@ -158,6 +178,8 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final toPhone = phoneController.text.trim();
+
     return Scaffold(
       backgroundColor: const Color(0xFFF5FBF7),
       appBar: AppBar(
@@ -176,6 +198,21 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
             padding: const EdgeInsets.all(24),
             children: [
               const SizedBox(height: 24),
+
+              Container(
+                width: double.infinity,
+                height: 120,
+                margin: const EdgeInsets.only(bottom: 18),
+                decoration: BoxDecoration(
+                    color: Colors.black,
+                    borderRadius: BorderRadius.circular(18),
+                ),
+                child: RTCVideoView(
+                    WebRTCService.remoteRenderer,
+                    objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain,
+                ),
+                ),
+
               Container(
                 padding: const EdgeInsets.all(26),
                 decoration: BoxDecoration(
@@ -189,12 +226,12 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
                 ),
                 child: Column(
                   children: [
-                    const CircleAvatar(
+                    CircleAvatar(
                       radius: 40,
                       backgroundColor: Colors.white,
                       child: Icon(
-                        Icons.wifi_calling_3,
-                        color: Color(0xFF0A7C3A),
+                        connected ? Icons.volume_up : Icons.wifi_calling_3,
+                        color: const Color(0xFF0A7C3A),
                         size: 42,
                       ),
                     ),
@@ -217,10 +254,22 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
                         fontSize: 14,
                       ),
                     ),
+                    if (calling && toPhone.isNotEmpty) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        toPhone,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
+
               const SizedBox(height: 28),
+
               TextField(
                 controller: phoneController,
                 keyboardType: TextInputType.phone,
@@ -233,17 +282,15 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
                   prefixIcon: const Icon(Icons.person_search),
                   filled: true,
                   fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 18,
-                    vertical: 18,
-                  ),
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(22),
                     borderSide: BorderSide.none,
                   ),
                 ),
               ),
+
               const SizedBox(height: 22),
+
               if (!calling)
                 ElevatedButton.icon(
                   onPressed: startFreeCall,
@@ -253,12 +300,9 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
                     backgroundColor: const Color(0xFF0A7C3A),
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 18),
-                    textStyle: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 16,
-                    ),
                   ),
                 ),
+
               if (calling)
                 ElevatedButton.icon(
                   onPressed: endCall,
@@ -268,10 +312,6 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
                     backgroundColor: Colors.red,
                     foregroundColor: Colors.white,
                     padding: const EdgeInsets.symmetric(vertical: 18),
-                    textStyle: const TextStyle(
-                      fontWeight: FontWeight.w900,
-                      fontSize: 16,
-                    ),
                   ),
                 ),
             ],
