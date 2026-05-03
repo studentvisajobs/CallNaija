@@ -10,6 +10,7 @@ const path = require('path');
 
 const http = require('http');
 const { Server } = require('socket.io'); 
+const admin = require('firebase-admin');
 
 const app = express();
 
@@ -23,6 +24,56 @@ const io = new Server(server, {
 });
 
 const onlineUsers = {};
+
+let firebaseReady = false;
+
+try {
+  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+    });
+
+    firebaseReady = true;
+    console.log('Firebase Admin loaded');
+  } else {
+    console.log('FIREBASE_SERVICE_ACCOUNT missing');
+  }
+} catch (err) {
+  console.error('Firebase Admin error:', err.message);
+}
+
+async function sendIncomingCallPush({ toPhone, fromPhone, fromName }) {
+  if (!firebaseReady) return;
+
+  const data = loadData();
+  const user = findUserByPhone(data, toPhone);
+
+  if (!user || !user.pushToken) {
+    console.log('No push token for:', toPhone);
+    return;
+  }
+
+  try {
+    await admin.messaging().send({
+      token: user.pushToken,
+      notification: {
+        title: 'Incoming CallNaija call',
+        body: `${fromName || fromPhone} is calling you`,
+      },
+      data: {
+        type: 'incoming_call',
+        fromPhone: fromPhone || '',
+        fromName: fromName || 'Incoming call',
+      },
+    });
+
+    console.log('Push sent to:', toPhone);
+  } catch (err) {
+    console.error('Push send error:', err.message);
+  }
+}
 
 console.log('CALLNAIJA SERVER LOADED - OTP ENABLED');
 
@@ -430,6 +481,47 @@ app.post('/login', async (req, res) => {
   }
 });
 
+app.post('/save-push-token', (req, res) => {
+  try {
+    const phone = cleanPhone(req.body.phone);
+    const token = String(req.body.token || '').trim();
+
+    if (!phone || !token) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone and token are required',
+      });
+    }
+
+    const data = loadData();
+    const user = findUserByPhone(data, phone);
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found',
+      });
+    }
+
+    user.pushToken = token;
+    user.pushTokenUpdatedAt = new Date().toISOString();
+
+    saveData(data);
+
+    res.json({
+      success: true,
+      message: 'Push token saved',
+    });
+  } catch (err) {
+    console.error('Save push token error:', err.message);
+
+    res.status(500).json({
+      success: false,
+      error: 'Could not save push token',
+    });
+  }
+});
+
 app.get('/wallet', (req, res) => {
   const result = requireUser(req, res);
   if (!result) return;
@@ -788,22 +880,27 @@ io.on('connection', (socket) => {
     io.emit('online-users', Object.values(onlineUsers));
   });
 
-  socket.on('call-user', ({ fromPhone, fromName, toPhone, offer }) => {
-    const target = onlineUsers[toPhone];
+socket.on('call-user', async ({ fromPhone, fromName, toPhone, offer }) => {
+  const target = onlineUsers[toPhone];
 
-    if (!target) {
-      socket.emit('call-error', {
-        message: 'User is not online',
-      });
-      return;
-    }
-
+  if (target) {
     io.to(target.socketId).emit('incoming-call', {
       fromPhone,
       fromName,
       offer,
     });
+  } else {
+    socket.emit('call-error', {
+      message: 'User is not online. Push notification sent if available.',
+    });
+  }
+
+  await sendIncomingCallPush({
+    toPhone,
+    fromPhone,
+    fromName,
   });
+});
 
   socket.on('answer-call', ({ toPhone, answer }) => {
     const target = onlineUsers[toPhone];
