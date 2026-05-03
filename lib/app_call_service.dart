@@ -2,6 +2,7 @@ import 'package:socket_io_client/socket_io_client.dart' as IO;
 
 class AppCallService {
   static IO.Socket? socket;
+  static dynamic latestOffer;
 
   static void connect({
     required String phone,
@@ -49,12 +50,8 @@ class AppCallService {
     });
   }
 
-  static void rejectCall({
-    required String toPhone,
-  }) {
-    socket?.emit('reject-call', {
-      'toPhone': toPhone,
-    });
+  static void rejectCall({required String toPhone}) {
+    socket?.emit('reject-call', {'toPhone': toPhone});
   }
 
   static void sendIceCandidate({
@@ -67,17 +64,16 @@ class AppCallService {
     });
   }
 
-  static void endCall({
-    required String toPhone,
-  }) {
-    socket?.emit('end-call', {
-      'toPhone': toPhone,
-    });
+  static void endCall({required String toPhone}) {
+    socket?.emit('end-call', {'toPhone': toPhone});
   }
 
   static void onIncomingCall(Function(dynamic data) callback) {
     socket?.off('incoming-call');
-    socket?.on('incoming-call', callback);
+    socket?.on('incoming-call', (data) {
+      latestOffer = data['offer'];
+      callback(data);
+    });
   }
 
   static void onCallAnswered(Function(dynamic data) callback) {
