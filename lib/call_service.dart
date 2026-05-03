@@ -61,6 +61,23 @@ class CallService {
   static String? currentUserName;
   static bool currentUserVerified = false;
 
+static Future<Map<String, dynamic>?> getPendingCall() async {
+  if (currentUserPhone == null) return null;
+
+  final response = await http.get(
+    Uri.parse('$baseUrl/pending-call?phone=$currentUserPhone'),
+    headers: authHeaders,
+  );
+
+  final data = _decodeResponse(response);
+
+  if (data['success'] == true && data['hasCall'] == true) {
+    return Map<String, dynamic>.from(data['call']);
+  }
+
+  return null;
+}
+
   static Map<String, String> get authHeaders {
     return {
       'Content-Type': 'application/json',
