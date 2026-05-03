@@ -208,6 +208,25 @@ class CallService {
     return CallStatusResult.fromJson(data);
   }
 
+static Future<void> savePushToken(String token) async {
+  if (currentUserPhone == null) return;
+
+  try {
+    final response = await http.post(
+      Uri.parse('$baseUrl/save-push-token'),
+      headers: authHeaders,
+      body: jsonEncode({
+        'phone': currentUserPhone,
+        'token': token,
+      }),
+    );
+
+    print('Push token save response: ${response.statusCode} ${response.body}');
+  } catch (e) {
+    print('Failed to save push token: $e');
+  }
+}
+
   // WALLET
   static Future<Map<String, dynamic>> getWallet() async {
     if (currentUserPhone == null) {
