@@ -10,7 +10,20 @@ import 'call_service.dart';
 import 'call_history_screen.dart';
 import 'login_screen.dart';
 
-void main() {
+import 'package:firebase_core/firebase_core.dart';
+
+import 'firebase_options.dart';
+import 'push_notification_service.dart';
+
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
+
   runApp(const CallNaijaApp());
 }
 
@@ -21,6 +34,7 @@ class CallNaijaApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'CallNaija',
+       navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         useMaterial3: true,
@@ -93,13 +107,53 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool paymentLoading = false;
   bool paymentInProgress = false;
 
+Future<void> checkPendingCall() async {
+  try {
+    final pending = await CallService.getPendingCall();
+
+    if (!mounted || pending == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => IncomingCallScreen(
+          fromPhone: pending['fromPhone']?.toString() ?? '',
+          fromName: pending['fromName']?.toString() ?? 'Incoming call',
+          offer: pending['offer'],
+        ),
+      ),
+    );
+  } catch (e) {
+    debugPrint('Pending call check failed: $e');
+  }
+}
+
+@override
+void didChangeAppLifecycleState(AppLifecycleState state) {
+  if (state == AppLifecycleState.resumed) {
+    loadWallet();
+    checkPendingCall();
+
+    if (paymentInProgress) {
+      setState(() => paymentInProgress = false);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wallet refreshed')),
+      );
+    }
+  }
+}
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     callerController.text = CallService.currentUserPhone ?? '';
-    loadWallet();
-    connectToFreeCallService();
+loadWallet();
+connectToFreeCallService();
+PushNotificationService.init(navigatorKey);
+
+Future.delayed(const Duration(seconds: 2), checkPendingCall);
   }
 
   void connectToFreeCallService() {
