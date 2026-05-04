@@ -24,6 +24,7 @@ const io = new Server(server, {
 });
 
 const onlineUsers = {};
+const pendingCalls = {};
 
 let firebaseReady = false;
 
@@ -265,8 +266,30 @@ const callStatuses = {};
 const RATE_PER_MINUTE = 0.10;
 const MINIMUM_BALANCE_TO_CALL = 0.20;
 
-app.get('/', (req, res) => {
-  res.send('CallNaija API is running');
+app.get('/pending-call', (req, res) => {
+  const phone = cleanPhone(req.query.phone);
+
+  if (!phone) {
+    return res.json({ success: false });
+  }
+
+  const call = pendingCalls[phone];
+
+  if (!call) {
+    return res.json({ success: true, hasCall: false });
+  }
+
+  // expire after 60 seconds
+  if (Date.now() - call.createdAt > 60000) {
+    delete pendingCalls[phone];
+    return res.json({ success: true, hasCall: false });
+  }
+
+  return res.json({
+    success: true,
+    hasCall: true,
+    call,
+  });
 });
 
 app.post('/register', async (req, res) => {
@@ -867,25 +890,37 @@ const PORT = process.env.PORT || 3000;
 io.on('connection', (socket) => {
   console.log('Socket connected:', socket.id);
 
-  socket.on('user-online', ({ phone, name }) => {
-    if (!phone) return;
+socket.on('user-online', ({ phone, name }) => {
+  const cleanUserPhone = cleanPhone(phone);
+  if (!cleanUserPhone) return;
 
-    onlineUsers[phone] = {
-      socketId: socket.id,
-      phone,
-      name: name || phone,
-    };
+  onlineUsers[cleanUserPhone] = {
+    socketId: socket.id,
+    phone: cleanUserPhone,
+    name: name || cleanUserPhone,
+  };
 
-    console.log('User online:', phone);
-    io.emit('online-users', Object.values(onlineUsers));
-  });
+  console.log('User online:', cleanUserPhone);
+  io.emit('online-users', Object.values(onlineUsers));
+});
 
 socket.on('call-user', async ({ fromPhone, fromName, toPhone, offer }) => {
-  const target = onlineUsers[toPhone];
+  const cleanFrom = cleanPhone(fromPhone);
+  const cleanTo = cleanPhone(toPhone);
+
+  // Save pending call
+  pendingCalls[cleanTo] = {
+    fromPhone: cleanFrom,
+    fromName,
+    offer,
+    createdAt: Date.now(),
+  };
+
+  const target = onlineUsers[cleanTo];
 
   if (target) {
     io.to(target.socketId).emit('incoming-call', {
-      fromPhone,
+      fromPhone: cleanFrom,
       fromName,
       offer,
     });
@@ -896,47 +931,57 @@ socket.on('call-user', async ({ fromPhone, fromName, toPhone, offer }) => {
   }
 
   await sendIncomingCallPush({
-    toPhone,
-    fromPhone,
+    toPhone: cleanTo,
+    fromPhone: cleanFrom,
     fromName,
   });
 });
 
-  socket.on('answer-call', ({ toPhone, answer }) => {
-    const target = onlineUsers[toPhone];
+socket.on('answer-call', ({ toPhone, answer }) => {
+  const cleanTo = cleanPhone(toPhone);
+  const target = onlineUsers[cleanTo];
 
-    if (target) {
-      io.to(target.socketId).emit('call-answered', {
-        answer,
-      });
-    }
-  });
+  delete pendingCalls[cleanTo];
 
-  socket.on('reject-call', ({ toPhone }) => {
-    const target = onlineUsers[toPhone];
+  if (target) {
+    io.to(target.socketId).emit('call-answered', {
+      answer,
+    });
+  }
+});
 
-    if (target) {
-      io.to(target.socketId).emit('call-rejected');
-    }
-  });
+socket.on('reject-call', ({ toPhone }) => {
+  const cleanTo = cleanPhone(toPhone);
+  const target = onlineUsers[cleanTo];
 
-  socket.on('ice-candidate', ({ toPhone, candidate }) => {
-    const target = onlineUsers[toPhone];
+  delete pendingCalls[cleanTo];
 
-    if (target) {
-      io.to(target.socketId).emit('ice-candidate', {
-        candidate,
-      });
-    }
-  });
+  if (target) {
+    io.to(target.socketId).emit('call-rejected');
+  }
+});
 
-  socket.on('end-call', ({ toPhone }) => {
-    const target = onlineUsers[toPhone];
+socket.on('ice-candidate', ({ toPhone, candidate }) => {
+  const cleanTo = cleanPhone(toPhone);
+  const target = onlineUsers[cleanTo];
 
-    if (target) {
-      io.to(target.socketId).emit('call-ended');
-    }
-  });
+  if (target) {
+    io.to(target.socketId).emit('ice-candidate', {
+      candidate,
+    });
+  }
+});
+
+socket.on('end-call', ({ toPhone }) => {
+  const cleanTo = cleanPhone(toPhone);
+  const target = onlineUsers[cleanTo];
+
+  delete pendingCalls[cleanTo];
+
+  if (target) {
+    io.to(target.socketId).emit('call-ended');
+  }
+});
 
   socket.on('disconnect', () => {
     const phone = Object.keys(onlineUsers).find(
