@@ -274,6 +274,7 @@ app.get('/pending-call', (req, res) => {
       success: false,
       error: 'Phone is required',
     });
+    
   }
 
   const call = pendingCalls[phone];
@@ -302,7 +303,18 @@ app.get('/pending-call', (req, res) => {
   });
 });
 
+setInterval(() => {
+  const now = Date.now();
 
+  Object.keys(pendingCalls).forEach((phone) => {
+    const call = pendingCalls[phone];
+
+    if (call && now - call.createdAt > 60000) {
+      delete pendingCalls[phone];
+      console.log('Auto-cleared stale call:', phone);
+    }
+  });
+}, 10000);
 
 app.post('/clear-call', (req, res) => {
   const phone = cleanPhone(req.body.phone || req.body.toPhone);
