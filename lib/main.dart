@@ -172,7 +172,12 @@ loadWallet();
 connectToFreeCallService();
 PushNotificationService.init(navigatorKey);
 
-Future.delayed(const Duration(seconds: 2), checkPendingCall);
+// Backup check (only once after startup)
+Future.delayed(const Duration(seconds: 3), () {
+  if (!isIncomingCallOpen) {
+    checkPendingCall();
+  }
+});
   }
 
   void connectToFreeCallService() {
