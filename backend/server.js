@@ -339,6 +339,16 @@ app.post('/clear-call', (req, res) => {
 
 app.post('/trigger-call', async (req, res) => {
   try {
+
+    const triggerKey = req.headers['x-trigger-key'];
+
+if (process.env.TRIGGER_CALL_KEY && triggerKey !== process.env.TRIGGER_CALL_KEY) {
+  return res.status(401).json({
+    success: false,
+    error: 'Unauthorized',
+  });
+}
+
     const toPhone = cleanPhone(req.body.phone || req.body.toPhone);
     const fromPhone = cleanPhone(req.body.fromPhone || '+0000000000');
     const fromName = String(req.body.fromName || 'CallNaija Caller').trim();
