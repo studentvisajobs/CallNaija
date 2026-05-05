@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "324328357412",
+    "project_id": "callnaija",
+    "storage_bucket": "callnaija.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:324328357412:android:763806fa446e58203aa2b1",
+        "android_client_info": {
+          "package_name": "com.example.callnaija"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDEGAnaWJXl2tMYehtzhtVidQljMYZM6e0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

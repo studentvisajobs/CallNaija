@@ -8,6 +8,7 @@ class PushNotificationService {
   static final FirebaseMessaging _messaging = FirebaseMessaging.instance;
 
   static late GlobalKey<NavigatorState> navigatorKey;
+  static bool isIncomingCallOpen = false;
 
   static Future<void> init(GlobalKey<NavigatorState> navKey) async {
     navigatorKey = navKey;
@@ -24,6 +25,12 @@ class PushNotificationService {
       await CallService.savePushToken(token);
     }
 
+    FirebaseMessaging.instance.onTokenRefresh.listen((newToken) async {
+      if (CallService.currentUserPhone != null) {
+        await CallService.savePushToken(newToken);
+      }
+    });
+
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       _handleIncomingCall(message);
     });
@@ -31,9 +38,17 @@ class PushNotificationService {
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       _handleIncomingCall(message);
     });
+
+    final initialMessage = await FirebaseMessaging.instance.getInitialMessage();
+
+    if (initialMessage != null) {
+      _handleIncomingCall(initialMessage);
+    }
   }
 
   static Future<void> _handleIncomingCall(RemoteMessage message) async {
+    if (isIncomingCallOpen) return;
+
     final data = message.data;
 
     if (data['type'] != 'incoming_call') return;
@@ -42,7 +57,9 @@ class PushNotificationService {
 
     if (pending == null) return;
 
-    navigatorKey.currentState?.push(
+    isIncomingCallOpen = true;
+
+    await navigatorKey.currentState?.push(
       MaterialPageRoute(
         builder: (_) => IncomingCallScreen(
           fromPhone: pending['fromPhone']?.toString() ?? '',
@@ -51,5 +68,7 @@ class PushNotificationService {
         ),
       ),
     );
+
+    isIncomingCallOpen = false;
   }
 }
