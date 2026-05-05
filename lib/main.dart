@@ -106,23 +106,42 @@ class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   bool walletLoading = true;
   bool paymentLoading = false;
   bool paymentInProgress = false;
+  bool isIncomingCallOpen = false;
+
+Future<void> openIncomingCall(Map<String, dynamic> data) async {
+  if (!mounted || isIncomingCallOpen) return;
+
+  setState(() {
+    isIncomingCallOpen = true;
+  });
+
+  await Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => IncomingCallScreen(
+        fromPhone: data['fromPhone']?.toString() ?? '',
+        fromName: data['fromName']?.toString() ?? 'Incoming call',
+        offer: data['offer'],
+      ),
+    ),
+  );
+
+  if (!mounted) return;
+
+  setState(() {
+    isIncomingCallOpen = false;
+  });
+}
 
 Future<void> checkPendingCall() async {
   try {
+    if (isIncomingCallOpen) return;
+
     final pending = await CallService.getPendingCall();
 
     if (!mounted || pending == null) return;
 
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (_) => IncomingCallScreen(
-          fromPhone: pending['fromPhone']?.toString() ?? '',
-          fromName: pending['fromName']?.toString() ?? 'Incoming call',
-          offer: pending['offer'],
-        ),
-      ),
-    );
+    await openIncomingCall(pending);
   } catch (e) {
     debugPrint('Pending call check failed: $e');
   }
@@ -164,20 +183,11 @@ Future.delayed(const Duration(seconds: 2), checkPendingCall);
 
     AppCallService.connect(phone: phone, name: name);
 
-    AppCallService.onIncomingCall((data) {
-      if (!mounted) return;
+AppCallService.onIncomingCall((data) {
+  if (!mounted || isIncomingCallOpen) return;
 
-      Navigator.push(
-        context,
-        MaterialPageRoute(
-          builder: (_) => IncomingCallScreen(
-            fromPhone: data['fromPhone']?.toString() ?? '',
-            fromName: data['fromName']?.toString() ?? 'Incoming call',
-            offer: data['offer'],
-          ),
-        ),
-      );
-    });
+  openIncomingCall(Map<String, dynamic>.from(data));
+});
 
     AppCallService.onCallRejected(() {
       if (!mounted) return;
