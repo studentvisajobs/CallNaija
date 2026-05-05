@@ -270,25 +270,133 @@ app.get('/pending-call', (req, res) => {
   const phone = cleanPhone(req.query.phone);
 
   if (!phone) {
-    return res.json({ success: false });
+    return res.status(400).json({
+      success: false,
+      error: 'Phone is required',
+    });
   }
 
   const call = pendingCalls[phone];
 
   if (!call) {
-    return res.json({ success: true, hasCall: false });
+    return res.json({
+      success: true,
+      hasCall: false,
+    });
   }
 
   // expire after 60 seconds
   if (Date.now() - call.createdAt > 60000) {
     delete pendingCalls[phone];
-    return res.json({ success: true, hasCall: false });
+
+    return res.json({
+      success: true,
+      hasCall: false,
+    });
   }
 
   return res.json({
     success: true,
     hasCall: true,
     call,
+  });
+});
+
+
+
+app.post('/clear-call', (req, res) => {
+  const phone = cleanPhone(req.body.phone || req.body.toPhone);
+
+  if (!phone) {
+    return res.status(400).json({
+      success: false,
+      error: 'Phone is required',
+    });
+  }
+
+  delete pendingCalls[phone];
+
+  console.log('Call cleared for:', phone);
+
+  res.json({
+    success: true,
+    message: 'Call cleared',
+    phone,
+  });
+});
+
+app.post('/trigger-call', async (req, res) => {
+  try {
+    const toPhone = cleanPhone(req.body.phone || req.body.toPhone);
+    const fromPhone = cleanPhone(req.body.fromPhone || '+0000000000');
+    const fromName = String(req.body.fromName || 'CallNaija Caller').trim();
+
+    if (!toPhone) {
+      return res.status(400).json({
+        success: false,
+        error: 'Phone is required',
+      });
+    }
+
+    pendingCalls[toPhone] = {
+      fromPhone,
+      fromName,
+      offer: req.body.offer || null,
+      createdAt: Date.now(),
+    };
+
+    const target = onlineUsers[toPhone];
+
+    if (target) {
+      io.to(target.socketId).emit('incoming-call', {
+        fromPhone,
+        fromName,
+        offer: req.body.offer || null,
+      });
+    }
+
+    await sendIncomingCallPush({
+      toPhone,
+      fromPhone,
+      fromName,
+    });
+
+    console.log('Call triggered for:', toPhone);
+
+    res.json({
+      success: true,
+      message: 'Call triggered',
+      phone: toPhone,
+      deliveredBySocket: Boolean(target),
+    });
+  } catch (err) {
+    console.error('Trigger call error:', err.message);
+
+    res.status(500).json({
+      success: false,
+      error: 'Could not trigger call',
+    });
+  }
+});
+
+app.post('/clear-call', (req, res) => {
+  const phone = cleanPhone(req.body.phone || req.body.toPhone);
+
+  if (!phone) {
+    return res.status(400).json({
+      success: false,
+      error: 'Phone is required',
+    });
+  }
+
+  delete pendingCalls[phone];
+
+  console.log('Call cleared for:', phone);
+
+  res.json({
+    success: true,
+    message: 'Call cleared',
+    phone,
   });
 });
 
