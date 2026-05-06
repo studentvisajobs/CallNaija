@@ -13,6 +13,7 @@ class AppCallService {
       IO.OptionBuilder()
           .setTransports(['websocket'])
           .enableAutoConnect()
+          .enableReconnection()
           .build(),
     );
 
@@ -51,7 +52,15 @@ class AppCallService {
   }
 
   static void rejectCall({required String toPhone}) {
-    socket?.emit('reject-call', {'toPhone': toPhone});
+    socket?.emit('reject-call', {
+      'toPhone': toPhone,
+    });
+  }
+
+  static void endCall({required String toPhone}) {
+    socket?.emit('end-call', {
+      'toPhone': toPhone,
+    });
   }
 
   static void sendIceCandidate({
@@ -62,10 +71,6 @@ class AppCallService {
       'toPhone': toPhone,
       'candidate': candidate,
     });
-  }
-
-  static void endCall({required String toPhone}) {
-    socket?.emit('end-call', {'toPhone': toPhone});
   }
 
   static void onIncomingCall(Function(dynamic data) callback) {
@@ -83,7 +88,9 @@ class AppCallService {
 
   static void onCallRejected(Function() callback) {
     socket?.off('call-rejected');
-    socket?.on('call-rejected', (_) => callback());
+    socket?.on('call-rejected', (_) {
+      callback();
+    });
   }
 
   static void onIceCandidate(Function(dynamic data) callback) {
@@ -93,6 +100,14 @@ class AppCallService {
 
   static void onCallEnded(Function() callback) {
     socket?.off('call-ended');
-    socket?.on('call-ended', (_) => callback());
+    socket?.on('call-ended', (_) {
+      callback();
+    });
+  }
+
+  static void disconnect() {
+    socket?.disconnect();
+    socket = null;
+    latestOffer = null;
   }
 }

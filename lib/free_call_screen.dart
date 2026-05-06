@@ -144,29 +144,37 @@ class _FreeCallScreenState extends State<FreeCallScreen> {
       await WebRTCService.addIceCandidate(candidate);
     });
 
-    AppCallService.onCallRejected(() {
-      if (!mounted) return;
+AppCallService.onCallRejected(() {
+  if (!mounted) return;
 
-      WebRTCService.dispose();
+  WebRTCService.dispose();
 
-      setState(() {
-        calling = false;
-        connected = false;
-        callStatus = 'Call rejected';
-      });
-    });
+  setState(() {
+    calling = false;
+    connected = false;
+    callStatus = 'Call rejected';
+  });
 
-    AppCallService.onCallEnded(() {
-      if (!mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Call rejected')),
+  );
+});
 
-      WebRTCService.dispose();
+AppCallService.onCallEnded(() {
+  if (!mounted) return;
 
-      setState(() {
-        calling = false;
-        connected = false;
-        callStatus = 'Call ended';
-      });
-    });
+  WebRTCService.dispose();
+
+  setState(() {
+    calling = false;
+    connected = false;
+    callStatus = 'Call ended';
+  });
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('Call ended')),
+  );
+});
   }
 
   @override
