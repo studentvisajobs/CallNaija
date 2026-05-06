@@ -19,7 +19,9 @@ class PushNotificationService {
       sound: true,
     );
 
-    final token = await _messaging.getToken();
+    final token = await _messaging.getToken(
+  vapidKey: 'BO40kVk7y2VNAVQy75lWHOK1wanawKdPiBCDGisqxEhe-YujwzVy2Y3meDGyPYGr7WfMEbXXnpX8_nFFtR6PfGk',
+);
 
     if (token != null && CallService.currentUserPhone != null) {
       await CallService.savePushToken(token);
